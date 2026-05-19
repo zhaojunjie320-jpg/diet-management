@@ -26,7 +26,28 @@
 
 ## 截图
 
-> TODO: 把导出的 1080×1920 分享卡 / 主界面截图放到 `docs/screenshots/` 然后在这里嵌入。
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/today.png" alt="今日页"/>
+      <br/>
+      <sub><b>今日页</b>：用户信息条 + 拆弹/被炸主题状态 + 4 个营养徽章 + 今日餐次 + 批量导入面板</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/meal-detail.png" alt="单餐详情 + AI 营养师"/>
+      <br/>
+      <sub><b>单餐详情</b>：菜品逐项营养表 + AI 营养师评分（1-10）+ 总结 + 3 条具体建议</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <img src="docs/screenshots/share-card.png" alt="抖音分享卡 1080x1920" width="320"/>
+      <br/>
+      <sub><b>抖音分享卡</b>（1080×1920 PNG 一键导出）：拆弹/被炸主题 hero + 营养徽章 + 今日餐次 + AI 一句话点评</sub>
+    </td>
+  </tr>
+</table>
+
 
 ## 文件结构
 
