@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>饮食管理 · 个人营养助手</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- 第三方依赖（CDN） -->
+  <script src="https://unpkg.com/vue@3.4.27/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/idb@8.0.0/build/umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部栏 -->
+    <header class="topbar">
+      <div class="brand">🥗 饮食管理</div>
+      <nav class="tabs">
+        <button :class="{active: tab==='today'}"   @click="tab='today'">今日</button>
+        <button :class="{active: tab==='history'}" @click="tab='history'">历史</button>
+        <button :class="{active: tab==='trends'}"  @click="tab='trends'">趋势</button>
+        <button :class="{active: tab==='settings'}" @click="tab='settings'">设置</button>
+      </nav>
+    </header>
+
+    <!-- 首次使用引导 -->
+    <div v-if="showOnboarding" class="modal-mask">
+      <div class="modal onboarding">
+        <h2>欢迎使用饮食管理 · 第 {{ onbStep }} / 5 步</h2>
+
+        <div v-if="onbStep===1" class="onb-form">
+          <h3>基本信息</h3>
+          <label>性别
+            <select v-model="draftProfile.gender">
+              <option value="male">男</option>
+              <option value="female">女</option>
+            </select>
+          </label>
+          <label>年龄<input type="number" v-model.number="draftProfile.age" min="10" max="100"/></label>
+          <label>身高 (cm)<input type="number" v-model.number="draftProfile.height" min="100" max="220"/></label>
+          <label>体重 (kg)<input type="number" v-model.number="draftProfile.weight" min="30" max="200" step="0.1"/></label>
+        </div>
+
+        <div v-if="onbStep===2" class="onb-form">
+          <h3>活动等级</h3>
+          <label class="radio-card" v-for="lvl in activityLevels" :key="lvl.value">
+            <input type="radio" :value="lvl.value" v-model="draftProfile.activityLevel"/>
+            <div>
+              <div class="rc-title">{{ lvl.label }}</div>
+              <div class="rc-desc">{{ lvl.desc }}</div>
+            </div>
+          </label>
+        </div>
+
+        <div v-if="onbStep===3" class="onb-form">
+          <h3>目标</h3>
+          <label class="radio-card" v-for="g in goals" :key="g.value">
+            <input type="radio" :value="g.value" v-model="draftProfile.goal"/>
+            <div>
+              <div class="rc-title">{{ g.label }}</div>
+              <div class="rc-desc">{{ g.desc }}</div>
+            </div>
+          </label>
+        </div>
+
+        <div v-if="onbStep===4" class="onb-form">
+          <h3>你的能量预算</h3>
+          <div class="preview-card" v-if="previewProfile">
+            <div class="kv"><span>基础代谢 BMR</span><b>{{ previewProfile.bmr }} kcal</b></div>
+            <div class="kv"><span>每日消耗 TDEE</span><b>{{ previewProfile.tdee }} kcal</b></div>
+            <div class="kv"><span>每日目标热量</span><b>{{ previewProfile.targetCalories }} kcal</b></div>
+            <div class="kv"><span>蛋白质目标</span><b>{{ previewProfile.targetMacros.protein }} g</b></div>
+            <div class="kv"><span>脂肪目标</span><b>{{ previewProfile.targetMacros.fat }} g</b></div>
+            <div class="kv"><span>碳水目标</span><b>{{ previewProfile.targetMacros.carbs }} g</b></div>
+          </div>
+          <p class="hint">公式：Mifflin-St Jeor + 中国居民膳食指南宏量推荐。可在「设置」中随时调整。</p>
+        </div>
+
+        <div v-if="onbStep===5" class="onb-form">
+          <h3>填写 API Key</h3>
+          <label>图像识别 API Key（识别账单）
+            <input type="password" v-model="draftApiKeys.vision" placeholder="sk-..." />
+          </label>
+          <label>图像识别接口 URL
+            <input type="text" v-model="draftApiKeys.visionBaseUrl" placeholder="https://xxx.com/v1/chat/completions" />
+          </label>
+          <label>图像识别模型名
+            <input type="text" v-model="draftApiKeys.visionModel" placeholder="gemini-2.5-flash" />
+          </label>
+          <label>DeepSeek API Key（生成建议）
+            <input type="password" v-model="draftApiKeys.deepseek" placeholder="sk-..." />
+            <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">获取地址 ↗</a>
+          </label>
+          <p class="hint">Key 只存在你浏览器本地（localStorage），不会上传任何地方。<br/>
+            识别接口走 OpenAI 兼容协议（chat/completions + image_url）。<br/>
+            DeepSeek 因浏览器跨域限制，需要启动本地代理（见 README）；不想启代理就到设置里把"建议生成"切换为视觉接口同款。</p>
+        </div>
+
+        <div class="onb-actions">
+          <button v-if="onbStep>1" class="btn-ghost" @click="onbStep--">上一步</button>
+          <button v-if="onbStep<5" class="btn-primary" :disabled="!canNextOnb" @click="onbStep++">下一步</button>
+          <button v-if="onbStep===5" class="btn-primary" @click="finishOnboarding">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 今日 -->
+    <main v-show="tab==='today' && !showOnboarding" class="page">
+      <div class="page-head">
+        <h1>今日</h1>
+        <div class="page-head-right">
+          <button class="btn-ghost share-btn" @click="openShare">📱 导出抖音分享图</button>
+          <div class="today-date">{{ todayLabel }}</div>
+        </div>
+      </div>
+
+      <!-- 用户信息条 -->
+      <section class="card user-bar">
+        <div class="ub-item"><span class="ub-icon">{{ profile.gender === 'male' ? '👨' : '👩' }}</span><span class="ub-val">{{ profile.gender === 'male' ? '男' : '女' }}</span></div>
+        <div class="ub-sep"></div>
+        <div class="ub-item"><span class="ub-label">年龄</span><span class="ub-val">{{ profile.age }}</span></div>
+        <div class="ub-item"><span class="ub-label">身高</span><span class="ub-val">{{ profile.height }}<small>cm</small></span></div>
+        <div class="ub-item"><span class="ub-label">体重</span><span class="ub-val">{{ profile.weight }}<small>kg</small></span></div>
+        <div class="ub-sep"></div>
+        <div class="ub-item"><span class="ub-label">目标</span><span class="ub-val">{{ goalLabel(profile.goal) }}</span></div>
+        <div class="ub-item"><span class="ub-label">日预算</span><span class="ub-val">{{ profile.targetCalories }}<small>kcal</small></span></div>
+        <button class="ub-edit" @click="tab='settings'">编辑</button>
+      </section>
+
+      <!-- 进度概览：英雄状态 + 环形 + 徽章 -->
+      <section class="card status-summary">
+        <div class="hero-row" :class="'hero-' + heroStatus.cls">
+          <div class="hero-emoji">{{ heroStatus.emoji }}</div>
+          <div class="hero-content">
+            <div class="hero-title">{{ heroStatus.title }}</div>
+            <div class="hero-sub">{{ heroStatus.sub }}</div>
+          </div>
+          <div class="hero-ring">
+            <div ref="todayRingEl" class="ring-chart"></div>
+          </div>
+        </div>
+        <div class="status-badges">
+          <div v-for="b in todayBadges" :key="b.key"
+               class="status-badge" :class="'sb-' + b.state">
+            <div class="sb-emoji">{{ b.emoji }}</div>
+            <div class="sb-body">
+              <div class="sb-head">
+                <span class="sb-label">{{ b.label }}</span>
+                <span class="sb-tag">{{ b.tag }}</span>
+              </div>
+              <div class="sb-track"><div class="sb-fill" :style="{width: Math.min(100, b.pct) + '%'}"></div></div>
+              <div class="sb-val">{{ b.value }} / {{ b.target }} {{ b.unit }} · {{ b.pct }}%</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 今日列表（提前到批量导入和新增账单之上） -->
+      <section class="card today-meals">
+        <h2>今天吃了什么</h2>
+        <div v-if="todayMeals.length===0" class="empty">还没有记录，上传一张账单或补一份默认早餐开局</div>
+        <div v-for="m in todayMeals" :key="m.id" class="meal-row">
+          <div class="meal-row-left">
+            <div class="meal-tag">{{ mealTypeLabel(m.mealType) }}</div>
+            <div>
+              <div v-if="editingNameId === m.id" class="mr-name-edit" @click.stop>
+                <input class="name-edit-input active" v-model="editingNameValue"
+                       @keyup.enter="saveEditName(m)"
+                       @keyup.escape="cancelEditName"
+                       @blur="saveEditName(m)"
+                       placeholder="给这餐起个名字"/>
+              </div>
+              <div v-else class="mr-name editable" @click.stop="startEditName(m)">
+                <span v-if="displayRestaurant(m)">{{ displayRestaurant(m) }}</span>
+                <span v-else class="name-placeholder">+ 添加名称</span>
+              </div>
+              <div class="mr-sub">{{ formatTime(m.timestamp) }} · {{ m.items.length }} 项 · ¥{{ m.totalPrice.toFixed(2) }}</div>
+            </div>
+          </div>
+          <div class="meal-row-right">
+            <div><b>{{ Math.round(m.totals.calories) }}</b> kcal</div>
+            <button class="btn-link" @click="viewMeal(m)">详情</button>
+            <button class="btn-link" @click="shareMeal(m)">分享</button>
+            <button class="btn-link danger" @click="deleteMeal(m)">删除</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 批量导入截图（仅在服务器模式下显示） -->
+      <section v-if="importer.available" class="card import-panel">
+        <h2>批量导入 截图/ 目录</h2>
+        <div class="import-stats">
+          <span>共 <b>{{ importer.files.length }}</b> 张</span>
+          <span>已导入 <b>{{ importer.importedCount }}</b></span>
+          <span class="hl">待导入 <b>{{ importer.pendingCount }}</b></span>
+        </div>
+        <div v-if="importer.pendingCount > 0 && !importer.running" class="import-actions">
+          <label class="inline-check">
+            <input type="checkbox" v-model="importer.fillBreakfast"/>
+            导入完成后为每天自动补默认早餐（{{ defaultBreakfastSummary }}）
+          </label>
+          <button class="btn-primary" @click="runBatchImport">导入 {{ importer.pendingCount }} 张</button>
+        </div>
+        <div v-if="importer.pendingCount === 0 && !importer.running" class="import-actions">
+          <button class="btn-ghost" @click="addBreakfastForToday">为今天补一份默认早餐</button>
+        </div>
+        <div v-if="importer.running" class="import-progress">
+          <div class="ip-bar"><div class="ip-fill" :style="{width: importProgressPct + '%'}"></div></div>
+          <div class="ip-text">{{ importer.progress.index + 1 }} / {{ importer.progress.total }} · {{ importer.progress.status || '处理中…' }}</div>
+        </div>
+        <details v-if="importer.byDate.length" class="import-list">
+          <summary>按日期查看（{{ importer.byDate.length }} 天）</summary>
+          <div v-for="day in importer.byDate" :key="day.date" class="import-day">
+            <div class="id-head">
+              <b>{{ day.date }}</b>
+              <span>{{ day.importedCount }} / {{ day.files.length }} 已导入</span>
+            </div>
+            <div v-for="f in day.files" :key="f.name" class="id-file">
+              <span class="id-name" :class="{done: f.isImported}">{{ f.name }}</span>
+              <span class="id-stat">{{ f.isImported ? '✓' : '待导入' }}</span>
+            </div>
+          </div>
+        </details>
+        <div v-if="importer.lastResult" class="import-done">
+          ✅ 上次导入完成：{{ importer.lastResult.ok }} 成功，{{ importer.lastResult.fail }} 失败<span v-if="importer.lastResult.breakfasts">；补充早餐 {{ importer.lastResult.breakfasts }} 份</span>
+        </div>
+      </section>
+
+      <!-- 添加账单 -->
+      <section class="card upload-card">
+        <h2>新增账单</h2>
+        <div
+          class="dropzone"
+          :class="{dragging: dragOver, busy: visionBusy}"
+          @dragover.prevent="dragOver=true"
+          @dragleave.prevent="dragOver=false"
+          @drop.prevent="onDrop"
+          @click="openFilePicker"
+        >
+          <input ref="fileInput" type="file" accept="image/*" hidden @change="onFilePick"/>
+          <div v-if="!visionBusy">
+            <div class="dz-icon">📷</div>
+            <div>拖入或点击上传支付宝订单截图</div>
+            <div class="dz-hint">系统会自动识别菜名、克重、价格，匹配营养表</div>
+          </div>
+          <div v-else>
+            <div class="spinner"></div>
+            <div>{{ visionStatus }}</div>
+          </div>
+        </div>
+        <div class="upload-extra">
+          <button class="btn-ghost" @click="addBreakfastForToday">+ 为今天补默认早餐（{{ defaultBreakfastSummary }}）</button>
+        </div>
+      </section>
+
+      <!-- 当前识别报告（未保存） -->
+      <section v-if="pendingMeal" class="card meal-report">
+        <div class="mr-head">
+          <div>
+            <h2>
+              <template v-if="editingNameId === pendingMeal.id">
+                <input class="name-edit-input active title" v-model="editingNameValue"
+                       @keyup.enter="saveEditName(pendingMeal)"
+                       @keyup.escape="cancelEditName"
+                       @blur="saveEditName(pendingMeal)"
+                       placeholder="餐厅名"/>
+              </template>
+              <span v-else class="title-edit editable" @click="startEditName(pendingMeal)">
+                <span v-if="displayRestaurant(pendingMeal)">{{ displayRestaurant(pendingMeal) }}</span>
+                <span v-else class="name-placeholder">+ 添加名称</span>
+              </span>
+              <span class="meal-tag">{{ mealTypeLabel(pendingMeal.mealType) }}</span>
+            </h2>
+            <div class="mr-time">{{ formatTime(pendingMeal.timestamp) }}</div>
+          </div>
+          <div class="mr-actions">
+            <button class="btn-ghost" @click="discardPending">放弃</button>
+            <button class="btn-primary" @click="savePending">保存</button>
+          </div>
+        </div>
+
+        <div class="mr-totals">
+          <div class="mt-cell"><b>{{ Math.round(pendingMeal.totals.calories) }}</b><span>kcal</span></div>
+          <div class="mt-cell"><b>{{ pendingMeal.totals.protein.toFixed(1) }}</b><span>蛋白(g)</span></div>
+          <div class="mt-cell"><b>{{ pendingMeal.totals.fat.toFixed(1) }}</b><span>脂肪(g)</span></div>
+          <div class="mt-cell"><b>{{ pendingMeal.totals.carbs.toFixed(1) }}</b><span>碳水(g)</span></div>
+          <div class="mt-cell"><b>{{ Math.round(pendingMeal.totals.sodium) }}</b><span>钠(mg)</span></div>
+          <div class="mt-cell"><b>¥{{ pendingMeal.totalPrice.toFixed(2) }}</b><span>实付</span></div>
+        </div>
+
+        <div class="mr-charts">
+          <div ref="mealRingEl" class="ring-chart"></div>
+          <div class="mr-alerts" v-if="pendingMeal.alerts && pendingMeal.alerts.length">
+            <div v-for="a in pendingMeal.alerts" :key="a.code"
+                 class="alert" :class="'alert-' + a.level">
+              <span class="alert-dot"></span>{{ a.msg }}
+            </div>
+          </div>
+        </div>
+
+        <table class="mr-table">
+          <thead><tr><th>菜品</th><th>克重</th><th>匹配</th><th>热量</th><th>蛋白</th><th>脂肪</th><th>碳水</th><th>价格</th></tr></thead>
+          <tbody>
+            <tr v-for="(it, i) in pendingMeal.items" :key="i">
+              <td>{{ it.name }}</td>
+              <td>{{ it.grams }} g</td>
+              <td><span class="match-badge" :class="'src-'+it.matchSource">{{ matchLabel(it.matchSource) }}</span> {{ it.matchedFood || '-' }}</td>
+              <td>{{ Math.round(it.nutrition.calories) }}</td>
+              <td>{{ it.nutrition.protein.toFixed(1) }}</td>
+              <td>{{ it.nutrition.fat.toFixed(1) }}</td>
+              <td>{{ it.nutrition.carbs.toFixed(1) }}</td>
+              <td>¥{{ (it.price || 0).toFixed(2) }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="mr-review">
+          <h3>AI 营养师点评 <button class="btn-link" :disabled="coachBusy" @click="refreshReview">{{ coachBusy ? '生成中…' : '重新生成' }}</button></h3>
+          <div v-if="pendingMeal.aiReview" class="review-box">
+            <div class="review-rating">评分：<b>{{ pendingMeal.aiReview.rating }}</b> / 10</div>
+            <p class="review-summary">{{ pendingMeal.aiReview.summary }}</p>
+            <ul class="review-suggestions">
+              <li v-for="(s, i) in pendingMeal.aiReview.suggestions" :key="i">{{ s }}</li>
+            </ul>
+          </div>
+          <div v-else-if="coachBusy" class="review-loading">正在请 AI 营养师分析…</div>
+          <div v-else class="review-loading">点「重新生成」获取建议</div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- 历史 -->
+    <main v-show="tab==='history' && !showOnboarding" class="page">
+      <h1>历史</h1>
+      <div class="card">
+        <div v-if="historyByDay.length===0" class="empty">还没有记录</div>
+        <div v-for="day in historyByDay" :key="day.date" class="history-day">
+          <div class="hd-head">
+            <div class="hd-date">{{ day.date }}</div>
+            <div class="hd-totals">
+              <span>{{ Math.round(day.totals.calories) }} kcal</span> ·
+              <span>蛋白 {{ day.totals.protein.toFixed(0) }}g</span> ·
+              <span>脂肪 {{ day.totals.fat.toFixed(0) }}g</span> ·
+              <span>碳水 {{ day.totals.carbs.toFixed(0) }}g</span> ·
+              <span>¥{{ day.totals.price.toFixed(2) }}</span>
+            </div>
+          </div>
+          <div v-for="m in day.meals" :key="m.id" class="meal-row">
+            <div class="meal-row-left">
+              <div class="meal-tag">{{ mealTypeLabel(m.mealType) }}</div>
+              <div>
+                <div v-if="editingNameId === m.id" class="mr-name-edit" @click.stop>
+                <input class="name-edit-input active" v-model="editingNameValue"
+                       @keyup.enter="saveEditName(m)"
+                       @keyup.escape="cancelEditName"
+                       @blur="saveEditName(m)"
+                       placeholder="给这餐起个名字"/>
+              </div>
+              <div v-else class="mr-name editable" @click.stop="startEditName(m)">
+                <span v-if="displayRestaurant(m)">{{ displayRestaurant(m) }}</span>
+                <span v-else class="name-placeholder">+ 添加名称</span>
+              </div>
+                <div class="mr-sub">{{ formatTime(m.timestamp) }} · {{ m.items.length }} 项</div>
+              </div>
+            </div>
+            <div class="meal-row-right">
+              <div><b>{{ Math.round(m.totals.calories) }}</b> kcal</div>
+              <button class="btn-link" @click="viewMeal(m)">详情</button>
+              <button class="btn-link danger" @click="deleteMeal(m)">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 趋势 -->
+    <main v-show="tab==='trends' && !showOnboarding" class="page">
+      <h1>趋势</h1>
+      <div class="card">
+        <div class="trend-controls">
+          <button :class="{active:trendRange===7}" @click="trendRange=7; renderTrendCharts()">近 7 天</button>
+          <button :class="{active:trendRange===30}" @click="trendRange=30; renderTrendCharts()">近 30 天</button>
+        </div>
+        <h3>每日热量摄入 vs 目标</h3>
+        <div ref="trendCalEl" class="trend-chart"></div>
+        <h3>三大宏量营养素</h3>
+        <div ref="trendMacroEl" class="trend-chart"></div>
+      </div>
+    </main>
+
+    <!-- 设置 -->
+    <main v-show="tab==='settings' && !showOnboarding" class="page">
+      <h1>设置</h1>
+
+      <section class="card">
+        <h2>个人信息</h2>
+        <div class="settings-grid">
+          <label>性别
+            <select v-model="profile.gender">
+              <option value="male">男</option>
+              <option value="female">女</option>
+            </select>
+          </label>
+          <label>年龄<input type="number" v-model.number="profile.age"/></label>
+          <label>身高 (cm)<input type="number" v-model.number="profile.height"/></label>
+          <label>体重 (kg)<input type="number" v-model.number="profile.weight" step="0.1"/></label>
+          <label>活动等级
+            <select v-model="profile.activityLevel">
+              <option v-for="lvl in activityLevels" :key="lvl.value" :value="lvl.value">{{ lvl.label }}</option>
+            </select>
+          </label>
+          <label>目标
+            <select v-model="profile.goal">
+              <option v-for="g in goals" :key="g.value" :value="g.value">{{ g.label }}</option>
+            </select>
+          </label>
+        </div>
+        <div class="preview-card">
+          <div class="kv"><span>BMR</span><b>{{ profile.bmr }} kcal</b></div>
+          <div class="kv"><span>TDEE</span><b>{{ profile.tdee }} kcal</b></div>
+          <div class="kv"><span>每日目标热量</span><b>{{ profile.targetCalories }} kcal</b></div>
+          <div class="kv"><span>蛋白质 / 脂肪 / 碳水</span>
+            <b>{{ profile.targetMacros.protein }} / {{ profile.targetMacros.fat }} / {{ profile.targetMacros.carbs }} g</b>
+          </div>
+        </div>
+        <button class="btn-primary" @click="saveProfile">保存</button>
+      </section>
+
+      <section class="card">
+        <h2>API Key</h2>
+        <label>图像识别 API Key
+          <input type="password" v-model="apiKeys.vision" placeholder="sk-..." />
+        </label>
+        <label>图像识别接口 URL
+          <input type="text" v-model="apiKeys.visionBaseUrl" placeholder="https://xxx.com/v1/chat/completions" />
+        </label>
+        <label>图像识别模型名
+          <input type="text" v-model="apiKeys.visionModel" placeholder="gemini-2.5-flash" />
+        </label>
+        <label>DeepSeek API Key
+          <input type="password" v-model="apiKeys.deepseek" placeholder="sk-..." />
+        </label>
+        <label>DeepSeek 代理地址
+          <input type="text" v-model="apiKeys.deepseekProxy" placeholder="http://localhost:8787/deepseek" />
+        </label>
+        <label>建议生成模型
+          <select v-model="apiKeys.coachProvider">
+            <option value="deepseek">DeepSeek（推荐，需启动代理）</option>
+            <option value="vision">视觉接口同款（无需代理）</option>
+          </select>
+        </label>
+        <button class="btn-primary" @click="saveApiKeys">保存</button>
+      </section>
+
+      <section class="card">
+        <h2>提醒阈值</h2>
+        <div class="settings-grid">
+          <label>单餐钠上限 (mg)<input type="number" v-model.number="profile.alerts.sodiumMaxMg"/></label>
+          <label>每日蔬菜最低 (g)<input type="number" v-model.number="profile.alerts.vegMinG"/></label>
+          <label>脂肪供能比上限 (%)<input type="number" v-model.number="profile.alerts.fatRatioMax"/></label>
+        </div>
+        <button class="btn-primary" @click="saveProfile">保存</button>
+      </section>
+
+      <section class="card danger-zone">
+        <h2>数据</h2>
+        <button class="btn-ghost" @click="exportData">导出全部数据 (JSON)</button>
+        <button class="btn-ghost danger" @click="clearAll">清空所有记录</button>
+      </section>
+    </main>
+
+    <!-- 详情 modal -->
+    <div v-if="viewingMeal" class="modal-mask" @click.self="viewingMeal=null">
+      <div class="modal meal-detail">
+        <button class="modal-close" @click="viewingMeal=null">×</button>
+        <h2>
+          <template v-if="editingNameId === viewingMeal.id">
+            <input class="name-edit-input active title" v-model="editingNameValue"
+                   @keyup.enter="saveEditName(viewingMeal)"
+                   @keyup.escape="cancelEditName"
+                   @blur="saveEditName(viewingMeal)"
+                   placeholder="餐厅名"/>
+          </template>
+          <span v-else class="title-edit editable" @click="startEditName(viewingMeal)">
+            <span v-if="displayRestaurant(viewingMeal)">{{ displayRestaurant(viewingMeal) }}</span>
+            <span v-else class="name-placeholder">+ 添加名称</span>
+          </span>
+          <span class="meal-tag">{{ mealTypeLabel(viewingMeal.mealType) }}</span>
+        </h2>
+        <div class="mr-time">{{ formatTime(viewingMeal.timestamp) }}</div>
+        <div class="mr-totals">
+          <div class="mt-cell"><b>{{ Math.round(viewingMeal.totals.calories) }}</b><span>kcal</span></div>
+          <div class="mt-cell"><b>{{ viewingMeal.totals.protein.toFixed(1) }}</b><span>蛋白</span></div>
+          <div class="mt-cell"><b>{{ viewingMeal.totals.fat.toFixed(1) }}</b><span>脂肪</span></div>
+          <div class="mt-cell"><b>{{ viewingMeal.totals.carbs.toFixed(1) }}</b><span>碳水</span></div>
+        </div>
+        <table class="mr-table">
+          <thead><tr><th>菜品</th><th>克重</th><th>热量</th><th>蛋白</th><th>脂肪</th><th>碳水</th></tr></thead>
+          <tbody>
+            <tr v-for="(it, i) in viewingMeal.items" :key="i">
+              <td>{{ it.name }}</td><td>{{ it.grams }}g</td>
+              <td>{{ Math.round(it.nutrition.calories) }}</td>
+              <td>{{ it.nutrition.protein.toFixed(1) }}</td>
+              <td>{{ it.nutrition.fat.toFixed(1) }}</td>
+              <td>{{ it.nutrition.carbs.toFixed(1) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="mr-review">
+          <h3>AI 营养师点评
+            <button class="btn-link" :disabled="detailCoachBusy" @click="generateReviewForViewing">
+              {{ detailCoachBusy ? '生成中…' : (viewingMeal.aiReview ? '重新生成' : '✨ 生成点评') }}
+            </button>
+          </h3>
+          <div v-if="viewingMeal.aiReview" class="review-box">
+            <div class="review-rating">评分：<b>{{ viewingMeal.aiReview.rating }}</b> / 10</div>
+            <p class="review-summary">{{ viewingMeal.aiReview.summary }}</p>
+            <ul class="review-suggestions">
+              <li v-for="(s, i) in viewingMeal.aiReview.suggestions" :key="i">{{ s }}</li>
+            </ul>
+          </div>
+          <div v-else-if="detailCoachBusy" class="review-loading">正在请 AI 营养师分析…</div>
+          <div v-else class="review-loading">点「生成点评」让 AI 营养师按你的目标给评分和建议</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 分享卡 modal -->
+    <div v-if="showShare" class="modal-mask share-mask" @click.self="showShare=false">
+      <div class="share-wrap">
+        <button class="modal-close" @click="showShare=false">×</button>
+
+        <!-- 模式切换 -->
+        <div class="share-mode-tabs">
+          <button :class="{active: shareMode==='today'}" @click="switchShareMode('today')">今日总览</button>
+          <button :class="{active: shareMode==='meal'}"  @click="switchShareMode('meal')">单餐详情</button>
+        </div>
+        <!-- 单餐模式下选哪一餐 -->
+        <div v-if="shareMode==='meal'" class="share-meal-picker">
+          选择餐次：
+          <select v-model="shareTargetMeal">
+            <option v-for="m in meals" :key="m.id" :value="m">
+              {{ formatTime(m.timestamp) }} · {{ mealTypeLabel(m.mealType) }} · {{ displayRestaurant(m) || '未命名' }} · {{ Math.round(m.totals.calories) }} kcal
+            </option>
+          </select>
+        </div>
+
+        <div class="share-card-outer">
+
+          <!-- 今日总览卡 -->
+          <div v-if="shareMode==='today'"
+               ref="shareCardEl" class="share-card" :class="'sc-state-' + heroStatus.cls">
+            <div class="sc-header">
+              <span class="sc-brand">🥗 饮食管理</span>
+              <span class="sc-date">{{ shareDateLabel }}</span>
+            </div>
+            <div class="sc-profile">
+              <span>{{ profile.gender === 'male' ? '👨 男' : '👩 女' }}</span>
+              <span class="sc-dot">·</span>
+              <span>{{ profile.age }}<small>岁</small></span>
+              <span class="sc-dot">·</span>
+              <span>{{ profile.height }}<small>cm</small></span>
+              <span class="sc-dot">·</span>
+              <span>{{ profile.weight }}<small>kg</small></span>
+              <span class="sc-dot">·</span>
+              <span class="sc-profile-goal">{{ goalLabel(profile.goal) }} {{ profile.targetCalories }}<small>kcal</small></span>
+            </div>
+            <div class="sc-hero">
+              <div class="sc-hero-emoji">{{ heroStatus.emoji }}</div>
+              <div class="sc-hero-title">{{ heroStatus.title }}</div>
+              <div class="sc-hero-sub">{{ heroStatus.sub }}</div>
+            </div>
+            <div class="sc-cal-block">
+              <div class="sc-cal-num">{{ Math.round(todayTotals.calories) }}</div>
+              <div class="sc-cal-tgt">/ {{ profile.targetCalories }} kcal · {{ Math.round(todayTotals.calories / profile.targetCalories * 100) }}%</div>
+            </div>
+            <div class="sc-badges">
+              <div v-for="b in todayBadges" :key="b.key"
+                   class="sc-badge" :class="'sc-sb-' + b.state">
+                <div class="sc-be">{{ b.emoji }}</div>
+                <div class="sc-bm">
+                  <div class="sc-bl">{{ b.label }}</div>
+                  <div class="sc-bv">{{ b.value }}<small>/{{ b.target }}{{ b.unit }}</small></div>
+                </div>
+                <div class="sc-bp">{{ b.pct }}%</div>
+              </div>
+            </div>
+            <div class="sc-meals">
+              <div class="sc-meals-head">今日 {{ todayMeals.length }} 餐 · ¥{{ Math.round(todayTotals.price * 100) / 100 }}</div>
+              <div class="sc-meal" v-for="m in shareMealsForCard" :key="m.id">
+                <span class="sc-mt">{{ mealTypeLabel(m.mealType) }}</span>
+                <span class="sc-mn">{{ displayRestaurant(m) || '—' }}</span>
+                <span class="sc-mc">{{ Math.round(m.totals.calories) }} kcal</span>
+              </div>
+            </div>
+            <div class="sc-ai" v-if="shareAiTip">
+              <span class="sc-ai-icon">🤖</span>
+              <span class="sc-ai-text">{{ shareAiTip }}</span>
+            </div>
+            <div class="sc-footer">
+              <span class="sc-tag">#饮食管理</span>
+              <span class="sc-tag">{{ heroStatus.cls === 'bombed' ? '#被炸日记' : (heroStatus.cls === 'safe' ? '#拆弹专家' : '#今日预警') }}</span>
+              <span class="sc-tag">#营养师上线</span>
+            </div>
+          </div>
+
+          <!-- 单餐详情卡 -->
+          <div v-else-if="shareTargetMeal"
+               ref="shareCardEl" class="share-card sc-meal-card">
+            <div class="sc-header">
+              <span class="sc-brand">🥗 饮食管理</span>
+              <span class="sc-date">{{ formatTime(shareTargetMeal.timestamp) }}</span>
+            </div>
+            <div class="sc-meal-title">
+              <span class="sc-meal-tag">{{ mealTypeLabel(shareTargetMeal.mealType) }}</span>
+              <span class="sc-meal-name">{{ displayRestaurant(shareTargetMeal) || '未命名' }}</span>
+            </div>
+            <div class="sc-stats-row">
+              <div class="sc-stat"><b>{{ Math.round(shareTargetMeal.totals.calories) }}</b><span>kcal</span></div>
+              <div class="sc-stat"><b>{{ shareTargetMeal.totals.protein.toFixed(1) }}</b><span>蛋白(g)</span></div>
+              <div class="sc-stat"><b>{{ shareTargetMeal.totals.fat.toFixed(1) }}</b><span>脂肪(g)</span></div>
+              <div class="sc-stat"><b>{{ shareTargetMeal.totals.carbs.toFixed(1) }}</b><span>碳水(g)</span></div>
+            </div>
+            <div class="sc-items">
+              <div class="sc-items-head">本餐 {{ shareTargetMeal.items.length }} 项</div>
+              <div class="sc-item" v-for="(it, i) in shareTargetMeal.items" :key="i">
+                <span class="sc-i-name">{{ it.name }}</span>
+                <span class="sc-i-grams">{{ it.grams }}g</span>
+                <span class="sc-i-cal">{{ Math.round(it.nutrition.calories) }}</span>
+              </div>
+            </div>
+            <div v-if="shareTargetMeal.aiReview" class="sc-review">
+              <div class="sc-review-head">
+                <span class="sc-review-icon">🤖</span>
+                <span class="sc-review-label">AI 营养师</span>
+                <span class="sc-review-score">{{ shareTargetMeal.aiReview.rating }}/10</span>
+              </div>
+              <p class="sc-review-summary">{{ shareTargetMeal.aiReview.summary }}</p>
+              <ul class="sc-review-list">
+                <li v-for="(s, i) in shareTargetMeal.aiReview.suggestions.slice(0,3)" :key="i">{{ s }}</li>
+              </ul>
+            </div>
+            <div v-else class="sc-review-empty">
+              本餐还没生成 AI 点评 · 关闭弹窗回到详情页点「生成点评」
+            </div>
+            <div class="sc-footer">
+              <span class="sc-tag">#饮食管理</span>
+              <span class="sc-tag">#这一餐怎么样</span>
+              <span class="sc-tag">#营养师上线</span>
+            </div>
+          </div>
+
+          <div v-else class="share-empty-hint">还没有餐次可分享</div>
+        </div>
+
+        <div class="share-actions">
+          <button class="btn-ghost" @click="showShare=false">取消</button>
+          <button class="btn-primary" :disabled="shareBusy || (shareMode==='meal' && !shareTargetMeal)" @click="downloadShareImage">
+            {{ shareBusy ? '生成中…' : '⬇️ 下载 1080×1920 PNG' }}
+          </button>
+        </div>
+        <div class="share-hint">
+          海报按 3 倍像素导出（1080×1920），微信/抖音直接发即可
+        </div>
+      </div>
+    </div>
+
+    <!-- toast -->
+    <div v-if="toastMsg" class="toast" :class="'toast-' + toastLevel">{{ toastMsg }}</div>
+  </div>
+
+  <!-- 业务脚本：注意顺序 -->
+  <script src="data/config.local.js" onerror="window.__DEFAULT_CONFIG__=window.__DEFAULT_CONFIG__||null"></script>
+  <script src="data/food-db.js"></script>
+  <script src="js/targets.js"></script>
+  <script src="js/nutrition-db.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/alerts.js"></script>
+  <script src="js/ai-vision.js"></script>
+  <script src="js/ai-coach.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/batch-import.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+# ============ 敏感信息（绝对不能上传） ============
+# 本机配置：里面有 API Key
+data/config.local.js
+# 接口文档原始记录，可能含 key
+接口文档.txt
+# 任何 .env / 密钥文件
+.env
+.env.*
+*.key
+*.pem
+
+# ============ 用户隐私数据 ============
+# 你的真实订单截图，不要上传
+截图/
+
+# 根目录粘贴产生的临时图片（要展示用的截图请放 docs/screenshots/）
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+
+# ============ Node / 编辑器 ============
+node_modules/
+package-lock.json
+yarn.lock
+*.log
+
+# ============ 系统垃圾 ============
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============ IDE ============
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ============ Claude Code 临时计划文件 ============
+.claude/plans/
